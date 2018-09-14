@@ -1,3 +1,5 @@
+#import matplotlib
+#matplotlib.use('Agg')
 import matplotlib as mpl
 try:
     mpl.use('Qt5Agg')
@@ -12,98 +14,115 @@ import os
 import time
 from collections import namedtuple
 import numpy as np
+import random
 import matplotlib.pyplot as plt
 from matplotlib import cm
 import matplotlib.animation as animation
-from numba import autojit
+import numba
 
-neumann_n = [(-1,0),(1,0),(0,1),(0,-1),(0,0)]
+#first item cell iteself
+neumann_n = [(0,0),(0,1),(0,-1),(-1,0),(1,0)]
 
-moore_n = [(-1,0),(1,0),(0,1),(0,-1),(1,1),(-1,1),(1,-1),(-1,1),(0,0)]
+moore_n = [(0,0),(-1,0),(1,0),(0,1),(0,-1),(1,1),(-1,1),(1,-1),(-1,-1)]
 
 Neighborhood =  { "moore" : moore_n,
                  "neumann": neumann_n
 }
 
-@autojit
-def model(neighbors):
-    if np.sum(neighbors) > 5 or np.sum(neighbors) == 4:
-        return 1
+n_steps = 1600
+gridsize = 100
+n_state = 3
+neighborhood_type = 'neumann'
+neighborhood = Neighborhood[neighborhood_type]
+
+
+#Neural Activity functions
+@numba.jit(nopython=True)
+def R(x):
+    if x == 1:
+        return 2
     else:
         return 0
-
-class Grid(object):
-    def __init__(self, gridsize, n_steps, rule, neighborhood, n_state = 2, init_state='random'):
-        self.Z = np.zeros((gridsize, gridsize),"uint8")
-        if init_state == 'random':
-            self.Z = np.random.randint(n_state, size=(gridsize, gridsize))
-        else:
-            self.Z[gridsize // 2, gridsize // 2] = 1
-        self.dim = gridsize
-        self.steps = n_steps
-        self.rule = rule
-        self.n_state = n_state
-        self.neighborhood = Neighborhood[neighborhood]
     
-    def set_initial(self):
-        self.Z = np.zeros((self.dim, self.dim),"uint8")
-        self.Z[self.dim // 2, self.dim // 2] = 1
+@numba.jit(nopython=True)
+def D(x, l):
+    k = 0
+    if 1 in l:
+        k = 1
+    else:
+        k = 0
+    if x == 0:
+        return k
+    else:
+        return 0
     
-    @autojit
-    def update(self):
-        newZ = np.zeros((self.dim, self.dim),"uint8")
-        for i in range(0,self.dim):
-            for j in range(0,self.dim):
-                neighbors = []
-                for dx,dy in self.neighborhood:
-                    x = i + dx
-                    y = j + dy
-                    if x >= self.dim:
-                        x = 0
-                    if y >= self.dim:
-                        y = 0
-                    if x < 0:
-                        x = self.dim-1
-                    if y < 0:
-                        y = self.dim-1    
-                    neighbors.append(self.Z[x,y])
-                newZ[i,j] = model(neighbors)
-        self.Z = newZ
-        return self.Z
+@numba.jit(nopython=True)
+def model(neighbors, cell_1):
+    cell = neighbors[0]
+    return ((R(cell) + D(cell, neighbors[1:]) - cell_1))%3
 
-    def init_plot(self):
-        self.fig, self.ax = plt.subplots()
-        self.fig.set_size_inches(8, 8, True)
+def set_initial():
+    Z = np.zeros((gridsize, gridsize),"uint8")
+    Z[40,40] = 1
+    Z[49,46] = 1
+    Z[41,53] = 1
+    Z[45,45] = 2
+    
+def update_plot(i):
+    im.set_array(update())
+    return im
 
-        cmap = cm.nipy_spectral
-        cmap.set_over((1., 0., 0.))
-        cmap.set_under((0., 0., 1.))
-        bounds = list(x for x in range(0, self.n_state))
-        norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
-        self.im = self.ax.imshow(self.Z, cmap=cmap,animated=True, clim=(0, self.n_state))
-        # self.time0 = time.time()
-        return self.fig, self.ax
+@numba.jit(nopython=True)
+def evolve():
+    Z = np.zeros((gridsize, gridsize),"uint8")
+    t = 0
+
+    fig, ax = plt.subplots()
+    fig.set_size_inches(8, 8, True)
+
+    cmap = cm.Wistia
+    cmap.set_over((1., 0., 0.))
+    cmap.set_under((0., 0., 1.))
+    bounds = list(x for x in range(0, n_state))
+    norm = mpl.colors.BoundaryNorm(bounds, cmap.N)
+    im = ax.imshow(Z, cmap=cmap,animated=True, clim=(0, n_state))
+    newZ = Z.copy()
+    for i in range(0, gridsize):
+        for j in range(0, gridsize):
+            neighbors = []
+            cell_1 =  history[t-1][i,j]
+            for (dx,dy)in neighborhood:
+                x = i + dx
+                y = j + dy
+                if x >= gridsize:
+                    x = 0
+                if y >= gridsize:
+                    y = 0
+                if x < 0:
+                    x = gridsize-1
+                if y < 0:
+                    y = gridsize-1    
+                neighbors.append(Z[x,y])
+            newZ[i,j] = model(neighbors, cell_1)
         
-    @autojit
-    def update_plot(self,i):
-        self.im.set_array(self.update())
-        # if i == self.steps-1:
-            # print(("t= %s seconds " % (time.time() - self.time0)))
-        return self.im
+    Z = newZ.copy()
+    t = t + 1
+    history[t] = Z.copy()
+    return Z
 
-n_steps = 20
-G = Grid(100, n_steps, 999, 'moore', 2, 'random')
-fig, ax = G.init_plot()
-anim = animation.FuncAnimation(fig,
-                                   G.update_plot,
+if __name__ == "__main__":
+    set_initial()
+    history = {-1:np.zeros((gridsize, gridsize),"uint8"), 0:Z.copy()}
+    anim = animation.FuncAnimation(fig,
+                                   update_plot,
                                    np.arange(1, n_steps),
                                    repeat=False,
                                    blit=False,
                                    interval=100)
-plt.axis('off')
-plt.tight_layout()
+    plt.axis('off')
+    plt.tight_layout()
 
-    # Writer = animation.writers['ffmpeg']
-    # writer = Writer(fps=5, bitrate=1800)
-    # anim.save('moore.mp4', writer=writer)
-plt.show()
+    #Writer = animation.writers['ffmpeg']
+    #writer = Writer(fps=150, bitrate=1800)
+    #anim.save('moore.mp4', writer=writer)
+    plt.show()
